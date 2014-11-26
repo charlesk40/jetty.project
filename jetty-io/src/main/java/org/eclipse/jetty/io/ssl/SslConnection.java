@@ -788,8 +788,13 @@ public class SslConnection extends AbstractConnection
 
                             // if we have net bytes, let's try to flush them
                             if (BufferUtil.hasContent(_encryptedOutput))
+                            {
                                 if (!getEndPoint().flush(_encryptedOutput))
+                                {
+                                    Thread.yield();
                                     getEndPoint().flush(_encryptedOutput); // one retry
+                                }
+                            }
 
                             // But we also might have more to do for the handshaking state.
                             switch (handshakeStatus)
@@ -800,6 +805,18 @@ public class SslConnection extends AbstractConnection
                                     // try again.
                                     if (!allConsumed && wrapResult.getHandshakeStatus()==HandshakeStatus.FINISHED && BufferUtil.isEmpty(_encryptedOutput))
                                         continue;
+                                    
+                                    // If we have consumed all of the content, but there is un flushed encrypted data, then the caller 
+                                    // may not call again as it may check the remaining data in the buffer rather than the false return 
+                                    // from flush.  So instead directly do an async write of the encrypted data with callback at this level.
+                                    // The callback will complete this write flusher, but it may already have completed.
+                                    if (allConsumed && BufferUtil.hasContent(_encryptedOutput))
+                                    {
+                                        if (LOG.isDebugEnabled())
+                                            LOG.debug("SSLConnection buffering encrypted data {}",SslConnection.this);
+                                        getEndPoint().write(_writeCallback, _encryptedOutput);
+                                        return false;
+                                    }
                                     
                                     // Return true if we consumed all the bytes and encrypted are all flushed
                                     return allConsumed && BufferUtil.isEmpty(_encryptedOutput);
